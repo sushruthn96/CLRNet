@@ -48,7 +48,7 @@ ori_img_w = 1280
 ori_img_h = 720
 img_h = 320
 img_w = 800
-cut_height = 160 
+cut_height = 160
 
 train_process = [
     dict(
@@ -104,14 +104,16 @@ dataset = dict(train=dict(
     data_root=dataset_path,
     split='trainval',
     processes=train_process,
+    capture_likelihood=True,
+    cluster_info_path=""
 ),
-val=dict(
+    val=dict(
     type=dataset_type,
     data_root=dataset_path,
     split='test',
     processes=val_process,
 ),
-test=dict(
+    test=dict(
     type=dataset_type,
     data_root=dataset_path,
     split='test',

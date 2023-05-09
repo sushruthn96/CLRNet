@@ -175,6 +175,7 @@ class FocalLoss(nn.Module):
     References:
         [1] https://arxiv.org/abs/1708.02002
     """
+
     def __init__(self,
                  alpha: float,
                  gamma: float = 2.0,

@@ -37,6 +37,11 @@ class BaseDataset(Dataset):
     def __getitem__(self, idx):
         data_info = self.data_infos[idx]
         img = cv2.imread(data_info['img_path'])
+        while (img is None):
+            print("picking new!")
+            idx = np.random.randint(0, len(self.data_infos), size=1)[0]
+            data_info = self.data_infos[idx]
+            img = cv2.imread(data_info['img_path'])
         img = img[self.cfg.cut_height:, :, :]
         sample = data_info.copy()
         sample.update({'img': img})
@@ -63,5 +68,11 @@ class BaseDataset(Dataset):
                 'img_name': data_info['img_name']}
         meta = DC(meta, cpu_only=True)
         sample.update({'meta': meta})
+
+        if 'cluster_info' in data_info:
+            sample['sample_likelihood'] = data_info['cluster_info']['cluster_size'] / \
+                data_info['cluster_info']['largest_cluster_size']
+        else:
+            sample['sample_likelihood'] = 1.0
 
         return sample

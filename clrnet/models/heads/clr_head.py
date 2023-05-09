@@ -16,6 +16,7 @@ from clrnet.models.utils.roi_gather import ROIGather, LinearModule
 from clrnet.models.utils.seg_decoder import SegDecoder
 from clrnet.models.utils.dynamic_assign import assign
 from clrnet.models.losses.lineiou_loss import liou_loss
+from clrnet.models.losses.dq_loss import dequity_loss_weight
 from ..registry import HEADS
 
 
@@ -29,7 +30,9 @@ class CLRHead(nn.Module):
                  num_fc=2,
                  refine_layers=3,
                  sample_points=36,
-                 cfg=None):
+                 cfg=None,
+                 dequity_eta=3.0,
+                 dequity_gamma=5.0):
         super(CLRHead, self).__init__()
         self.cfg = cfg
         self.img_w = self.cfg.img_w
@@ -40,23 +43,26 @@ class CLRHead(nn.Module):
         self.sample_points = sample_points
         self.refine_layers = refine_layers
         self.fc_hidden_dim = fc_hidden_dim
+        self.dequity_eta = dequity_eta
+        self.dequity_gamma = dequity_gamma
 
         self.register_buffer(name='sample_x_indexs', tensor=(torch.linspace(
             0, 1, steps=self.sample_points, dtype=torch.float32) *
-                                self.n_strips).long())
+            self.n_strips).long())
         self.register_buffer(name='prior_feat_ys', tensor=torch.flip(
             (1 - self.sample_x_indexs.float() / self.n_strips), dims=[-1]))
         self.register_buffer(name='prior_ys', tensor=torch.linspace(1,
-                                       0,
-                                       steps=self.n_offsets,
-                                       dtype=torch.float32))
+                                                                    0,
+                                                                    steps=self.n_offsets,
+                                                                    dtype=torch.float32))
 
         self.prior_feat_channels = prior_feat_channels
 
         self._init_prior_embeddings()
-        init_priors, priors_on_featmap = self.generate_priors_from_embeddings() #None, None
+        init_priors, priors_on_featmap = self.generate_priors_from_embeddings()  # None, None
         self.register_buffer(name='priors', tensor=init_priors)
-        self.register_buffer(name='priors_on_featmap', tensor=priors_on_featmap)
+        self.register_buffer(name='priors_on_featmap',
+                             tensor=priors_on_featmap)
 
         # generate xys for feature map
         self.seg_decoder = SegDecoder(self.img_h, self.img_w,
@@ -84,7 +90,7 @@ class CLRHead(nn.Module):
         weights = torch.ones(self.cfg.num_classes)
         weights[0] = self.cfg.bg_weight
         self.criterion = torch.nn.NLLLoss(ignore_index=self.cfg.ignore_label,
-                                     weight=weights)
+                                          weight=weights)
 
         # init the weights here
         self.init_weights()
@@ -102,7 +108,7 @@ class CLRHead(nn.Module):
         '''
         pool prior feature from feature map.
         Args:
-            batch_features (Tensor): Input feature maps, shape: (B, C, H, W) 
+            batch_features (Tensor): Input feature maps, shape: (B, C, H, W)
         '''
 
         batch_size = batch_features.shape[0]
@@ -196,8 +202,8 @@ class CLRHead(nn.Module):
             self.priors, self.priors_on_featmap = self.generate_priors_from_embeddings()
 
         priors, priors_on_featmap = self.priors.repeat(batch_size, 1,
-                                                  1), self.priors_on_featmap.repeat(
-                                                      batch_size, 1, 1)
+                                                       1), self.priors_on_featmap.repeat(
+            batch_size, 1, 1)
 
         predictions_lists = []
 
@@ -269,7 +275,7 @@ class CLRHead(nn.Module):
                               align_corners=False)
                 for feature in batch_features
             ],
-                                     dim=1)
+                dim=1)
             seg = self.seg_decoder(seg_features)
             output = {'predictions_lists': predictions_lists, 'seg': seg}
             return self.loss(output, kwargs['batch'])
@@ -314,7 +320,7 @@ class CLRHead(nn.Module):
                             'start_x': lane[3],
                             'start_y': lane[2],
                             'conf': lane[1]
-                        })
+            })
             lanes.append(lane)
         return lanes
 
@@ -350,7 +356,8 @@ class CLRHead(nn.Module):
 
                 if len(target) == 0:
                     # If there are no targets, all predictions have to be negatives (i.e., 0 confidence)
-                    cls_target = predictions.new_zeros(predictions.shape[0]).long()
+                    cls_target = predictions.new_zeros(
+                        predictions.shape[0]).long()
                     cls_pred = predictions[:, :2]
                     cls_loss = cls_loss + cls_criterion(
                         cls_pred, cls_target).sum()
@@ -411,7 +418,7 @@ class CLRHead(nn.Module):
 
         # extra segmentation loss
         seg_loss = self.criterion(F.log_softmax(output['seg'], dim=1),
-                             batch['seg'].long())
+                                  batch['seg'].long())
 
         cls_loss /= (len(targets) * self.refine_layers)
         reg_xytl_loss /= (len(targets) * self.refine_layers)
@@ -419,15 +426,16 @@ class CLRHead(nn.Module):
 
         loss = cls_loss * cls_loss_weight + reg_xytl_loss * xyt_loss_weight \
             + seg_loss * seg_loss_weight + iou_loss * iou_loss_weight
-
+        dequity_weights = dequity_loss_weight(
+            batch["sample_likelihood"], eta=self.dequity_eta, gamma=self.dequity_gamma)
         return_value = {
-            'loss': loss,
+            'loss': loss * dequity_weights,
             'loss_stats': {
-                'loss': loss,
-                'cls_loss': cls_loss * cls_loss_weight,
-                'reg_xytl_loss': reg_xytl_loss * xyt_loss_weight,
-                'seg_loss': seg_loss * seg_loss_weight,
-                'iou_loss': iou_loss * iou_loss_weight
+                'loss': loss * dequity_weights,
+                'cls_loss': cls_loss * cls_loss_weight * dequity_weights,
+                'reg_xytl_loss': reg_xytl_loss * xyt_loss_weight * dequity_weights,
+                'seg_loss': seg_loss * seg_loss_weight * dequity_weights,
+                'iou_loss': iou_loss * iou_loss_weight * dequity_weights
             }
         }
 
@@ -435,7 +443,6 @@ class CLRHead(nn.Module):
             return_value['loss_stats']['stage_{}_acc'.format(i)] = cls_acc[i]
 
         return return_value
-
 
     def get_lanes(self, output, as_lanes=True):
         '''

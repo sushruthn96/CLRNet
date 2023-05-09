@@ -9,6 +9,7 @@ from clrnet.utils.tusimple_metric import LaneEval
 from .registry import DATASETS
 import logging
 import random
+import pickle
 
 SPLIT_FILES = {
     'trainval':
@@ -21,16 +22,22 @@ SPLIT_FILES = {
 
 @DATASETS.register_module
 class TuSimple(BaseDataset):
-    def __init__(self, data_root, split, processes=None, cfg=None):
+    def __init__(self, data_root, split, processes=None, cfg=None, capture_likelihood=False, cluster_info_path=None):
         super().__init__(data_root, split, processes, cfg)
         self.anno_files = SPLIT_FILES[split]
         self.load_annotations()
         self.h_samples = list(range(160, 720, 10))
+        self.capture_likelihood = capture_likelihood
+        self.cluster_info_path = cluster_info_path
 
     def load_annotations(self):
         self.logger.info('Loading TuSimple annotations...')
         self.data_infos = []
         max_lanes = 0
+        if self.capture_likelihood and self.cluster_info_path is not None:
+            # load cluster info pickle file
+            with open(self.cluster_info_path, 'rb') as f:
+                cluster_info = pickle.load(f)
         for anno_file in self.anno_files:
             anno_file = osp.join(self.data_root, anno_file)
             with open(anno_file, 'r') as anno_obj:
@@ -45,7 +52,7 @@ class TuSimple(BaseDataset):
                          for lane in gt_lanes]
                 lanes = [lane for lane in lanes if len(lane) > 0]
                 max_lanes = max(max_lanes, len(lanes))
-                self.data_infos.append({
+                curr_dict = {
                     'img_path':
                     osp.join(self.data_root, data['raw_file']),
                     'img_name':
@@ -54,7 +61,12 @@ class TuSimple(BaseDataset):
                     osp.join(self.data_root, mask_path),
                     'lanes':
                     lanes,
-                })
+                }
+                if data['raw_file'] in cluster_info:
+                    sample_cluster_info = cluster_info[data['raw_file']]
+                    curr_dict['cluster_info'] = sample_cluster_info
+
+                self.data_infos.append(curr_dict)
 
         if self.training:
             random.shuffle(self.data_infos)
