@@ -25,10 +25,10 @@ class TuSimple(BaseDataset):
     def __init__(self, data_root, split, processes=None, cfg=None, capture_likelihood=False, cluster_info_path=None):
         super().__init__(data_root, split, processes, cfg)
         self.anno_files = SPLIT_FILES[split]
-        self.load_annotations()
-        self.h_samples = list(range(160, 720, 10))
         self.capture_likelihood = capture_likelihood
         self.cluster_info_path = cluster_info_path
+        self.load_annotations()
+        self.h_samples = list(range(160, 720, 10))
 
     def load_annotations(self):
         self.logger.info('Loading TuSimple annotations...')
